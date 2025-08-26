@@ -1,6 +1,7 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useEffect, useState } from "react"
+import Link from "next/link"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -17,21 +18,36 @@ import {
   Calendar,
   Activity,
 } from "lucide-react"
-import Link from "next/link"
+
 import {
+  ResponsiveContainer,
   LineChart,
   Line,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
-  ResponsiveContainer,
-  BarChart,
-  Bar,
   PieChart,
   Pie,
   Cell,
+  BarChart,
+  Bar,
 } from "recharts"
+
+type ExecLog = {
+  date: string // YYYY-MM-DD
+  analyses: number
+  success: number
+  failed: number
+  processingTimes?: number[]
+}
+
+type AnalysisRecord = {
+  timestamp: string
+  success: boolean
+  status: number
+  processingTime: number
+}
 
 interface DashboardStats {
   totalAnalyses: number
@@ -40,8 +56,15 @@ interface DashboardStats {
   lastAnalysisDate: string | null
   avgProcessingTime: number
   promptsConfigured: number
-  analysisHistory: any[]
+  analysisHistory: { day: string; analyses: number; success: number; failed: number }[]
 }
+
+const SAFE_EMPTY_CHART = Array.from({ length: 7 }, (_, i) => ({
+  day: `Dia ${i + 1}`,
+  analyses: 0,
+  success: 0,
+  failed: 0,
+}))
 
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats>({
@@ -51,79 +74,117 @@ export default function DashboardPage() {
     lastAnalysisDate: null,
     avgProcessingTime: 0,
     promptsConfigured: 3,
-    analysisHistory: [],
+    analysisHistory: SAFE_EMPTY_CHART,
   })
+
+  // helpers
+  const safeParse = <T,>(str: string | null, fallback: T): T => {
+    try {
+      return str ? (JSON.parse(str) as T) : fallback
+    } catch {
+      return fallback
+    }
+  }
 
   useEffect(() => {
     const loadStats = () => {
-      try {
-        const analysisHistory = JSON.parse(localStorage.getItem("rca_analysis_history") || "[]")
-        const lastResponse = localStorage.getItem("rca_last_response")
-        const executionHistory = JSON.parse(localStorage.getItem("rca_execution_history") || "[]")
+      // fontes principais
+      const execHistory = safeParse<ExecLog[]>(localStorage.getItem("rca_execution_history"), [])
+      const analysisHistory = safeParse<AnalysisRecord[]>(localStorage.getItem("rca_analysis_history"), [])
 
-        const totalAnalyses = analysisHistory.length + executionHistory.length
-        const successfulAnalyses =
-          analysisHistory.filter((a: any) => a.success).length + executionHistory.filter((e: any) => e.success).length
-        const failedAnalyses = totalAnalyses - successfulAnalyses
+      // último resultado com fallback para chaves antigas
+      const lastRaw =
+        localStorage.getItem("rca_last_response") ||
+        localStorage.getItem("beely_last_response") ||
+        localStorage.getItem("rca_response") ||
+        localStorage.getItem("latest_analysis")
 
-        let lastAnalysisDate = null
-        if (lastResponse) {
-          const response = JSON.parse(lastResponse)
-          lastAnalysisDate = response.timestamp || new Date().toISOString()
-        }
+      const lastObj = safeParse<any>(lastRaw, null)
 
-        let chartData = []
-        if (executionHistory.length > 0) {
-          chartData = executionHistory.slice(-7).map((item: any, index: number) => ({
-            day: `Dia ${index + 1}`,
-            analyses: item.analyses || 0,
-            success: item.success || 0,
-            failed: item.failed || 0,
-          }))
-        } else {
-          chartData = Array.from({ length: 7 }, (_, index) => ({
-            day: `Dia ${index + 1}`,
-            analyses: 0,
-            success: 0,
-            failed: 0,
-          }))
-        }
+      // agrega do histórico diário (preferencial)
+      const dailyAgg = execHistory.reduce(
+        (acc, d) => {
+          acc.total += d.analyses || 0
+          acc.success += d.success || 0
+          acc.failed += d.failed || 0
+          if (Array.isArray(d.processingTimes)) acc.processingTimes.push(...d.processingTimes)
+          return acc
+        },
+        { total: 0, success: 0, failed: 0, processingTimes: [] as number[] },
+      )
 
-        setStats({
-          totalAnalyses,
-          successfulAnalyses,
-          failedAnalyses,
-          lastAnalysisDate,
-          avgProcessingTime:
-            executionHistory.length > 0
-              ? executionHistory.reduce((acc: number, curr: any) => acc + (curr.processingTime || 0), 0) /
-                executionHistory.length
-              : 0,
-          promptsConfigured: 3,
-          analysisHistory: chartData,
-        })
-      } catch (error) {
-        console.error("Erro ao carregar estatísticas:", error)
-        setStats({
-          totalAnalyses: 0,
-          successfulAnalyses: 0,
-          failedAnalyses: 0,
-          lastAnalysisDate: null,
-          avgProcessingTime: 0,
-          promptsConfigured: 3,
-          analysisHistory: Array.from({ length: 7 }, (_, index) => ({
-            day: `Dia ${index + 1}`,
-            analyses: 0,
-            success: 0,
-            failed: 0,
-          })),
-        })
-      }
+      // fallback: quando não há agregado diário, usa log por execução
+      const execAgg = analysisHistory.reduce(
+        (acc, it) => {
+          acc.total += 1
+          if (it.success) acc.success += 1
+          else acc.failed += 1
+          if (Number.isFinite(it.processingTime)) acc.processingTimes.push(it.processingTime)
+          return acc
+        },
+        { total: 0, success: 0, failed: 0, processingTimes: [] as number[] },
+      )
+
+      const base = dailyAgg.total > 0 ? dailyAgg : execAgg
+
+      // média de tempo
+      const avgProcessingTime =
+        base.processingTimes.length > 0
+          ? base.processingTimes.reduce((a, b) => a + b, 0) / base.processingTimes.length
+          : 0
+
+      // última análise
+      const lastAnalysisDate =
+        lastObj?.timestamp ||
+        (analysisHistory.length > 0 ? analysisHistory[analysisHistory.length - 1].timestamp : null) ||
+        null
+
+      // dados do gráfico (últimos 7 dias do agregado diário)
+      const last7 =
+        execHistory.length > 0
+          ? execHistory.slice(-7).map((d) => ({
+              day: d.date ? d.date.slice(5) : "",
+              analyses: d.analyses || 0,
+              success: d.success || 0,
+              failed: d.failed || 0,
+            }))
+          : SAFE_EMPTY_CHART
+
+      setStats({
+        totalAnalyses: base.total,
+        successfulAnalyses: base.success,
+        failedAnalyses: base.failed,
+        lastAnalysisDate,
+        avgProcessingTime,
+        promptsConfigured: 3,
+        analysisHistory: last7,
+      })
     }
 
     loadStats()
     const interval = setInterval(loadStats, 30000)
-    return () => clearInterval(interval)
+
+    const onStorage = (e: StorageEvent) => {
+      if (!e.key) return
+      if (
+        [
+          "rca_last_response",
+          "rca_analysis_history",
+          "rca_execution_history",
+          "beely_last_response",
+          "rca_response",
+          "latest_analysis",
+        ].includes(e.key)
+      ) {
+        loadStats()
+      }
+    }
+
+    window.addEventListener("storage", onStorage)
+    return () => {
+      clearInterval(interval)
+      window.removeEventListener("storage", onStorage)
+    }
   }, [])
 
   const successRate = stats.totalAnalyses > 0 ? (stats.successfulAnalyses / stats.totalAnalyses) * 100 : 0
@@ -135,11 +196,12 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div>
+      <div className="min-w-0">
         <h1 className="text-2xl font-bold">📊 Dashboard</h1>
         <p className="text-muted-foreground">Visão geral da sua plataforma de análise de falhas industriais</p>
       </div>
 
+      {/* KPIs */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -192,6 +254,7 @@ export default function DashboardPage() {
         </Card>
       </div>
 
+      {/* CTA se não houver dados */}
       {stats.totalAnalyses === 0 && (
         <Card className="border-dashed border-2">
           <CardContent className="text-center py-8">
@@ -208,14 +271,15 @@ export default function DashboardPage() {
         </Card>
       )}
 
+      {/* Gráficos linha e pizza */}
       <div className="grid gap-6 md:grid-cols-2">
-        <Card>
+        <Card className="w-full max-w-full overflow-hidden">
           <CardHeader>
             <CardTitle>📈 Histórico de Análises</CardTitle>
             <CardDescription>Análises realizadas nos últimos 7 dias</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="h-[300px]">
+            <div className="h-[300px] w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={stats.analysisHistory}>
                   <CartesianGrid strokeDasharray="3 3" />
@@ -229,13 +293,13 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="w-full max-w-full overflow-hidden">
           <CardHeader>
             <CardTitle>🎯 Taxa de Sucesso</CardTitle>
             <CardDescription>Distribuição de análises bem-sucedidas vs falhas</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="h-[300px]">
+            <div className="h-[300px] w-full">
               {stats.totalAnalyses > 0 ? (
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
@@ -246,7 +310,6 @@ export default function DashboardPage() {
                       labelLine={false}
                       label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
                       outerRadius={80}
-                      fill="#8884d8"
                       dataKey="value"
                     >
                       {pieData.map((entry, index) => (
@@ -269,6 +332,7 @@ export default function DashboardPage() {
         </Card>
       </div>
 
+      {/* Status + Ações rápidas */}
       <div className="grid gap-6 md:grid-cols-2">
         <Card>
           <CardHeader>
@@ -362,13 +426,14 @@ export default function DashboardPage() {
         </Card>
       </div>
 
-      <Card>
+      {/* Barras comparativas */}
+      <Card className="w-full max-w-full overflow-hidden">
         <CardHeader>
           <CardTitle>📊 Análises por Período</CardTitle>
           <CardDescription>Comparativo de sucessos e falhas ao longo do tempo</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="h-[300px]">
+          <div className="h-[300px] w-full">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={stats.analysisHistory}>
                 <CartesianGrid strokeDasharray="3 3" />
@@ -383,6 +448,7 @@ export default function DashboardPage() {
         </CardContent>
       </Card>
 
+      {/* Resumo final */}
       <Card>
         <CardHeader>
           <CardTitle>📈 Resumo das Análises</CardTitle>
