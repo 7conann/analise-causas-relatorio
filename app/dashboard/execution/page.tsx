@@ -297,10 +297,17 @@ export default function ExecutionPage() {
                 <CardTitle>Dados da Falha</CardTitle>
                 <CardDescription>Preencha as informações sobre a falha industrial</CardDescription>
               </div>
-              <Button variant="outline" onClick={handleLoadExampleCase} disabled={isLoading}>
-                <FileText className="h-4 w-4 mr-2" />
-                Carregar Exemplo
-              </Button>
+           <Button
+  variant="outline"
+  onClick={handleLoadExampleCase}
+  disabled={isLoading}
+  className="border border-gray-400"
+>
+  <FileText className="h-4 w-4 mr-2" />
+  Carregar Exemplo
+</Button>
+
+
             </div>
           </CardHeader>
           <CardContent className="space-y-6">

@@ -206,7 +206,7 @@ export default function PromptsPage() {
         </div>
       </div>
 
-<div className="grid gap-8 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
+<div className="grid gap-8 grid-cols-1 ">
         {promptConfigs.map((config, index) => (
           <Card key={config.key} className="prompt-editor shadow-lg border-0 bg-card/50 backdrop-blur-sm">
             <CardHeader className="pb-4">
